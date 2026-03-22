@@ -40,40 +40,44 @@ static uintptr_t getLibBase(const char* name) {
     return (base == (uintptr_t)-1) ? 0 : base;
 }
 
+// ── Safe memory read helper ──────────────────────────────────
+static bool isValidPtr(uintptr_t ptr) {
+    return ptr > 0x10000 && ptr < 0xF0000000;
+}
+
 // ── God Mode Thread ───────────────────────────────────────────
-static void* godThread(void*) {
+static void* godThread(void* arg) {
+    uintptr_t base = (uintptr_t)arg; // base dipass via argument
     writeLog("[Thread] GodMode thread started");
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "[Thread] base=0x%x", (unsigned)base);
+    writeLog(buf);
 
     while (g_running) {
         usleep(100000); // 100ms
 
-        if (!g_gtasaBase) continue;
-
         // Baca pointer CPed dari CWorld::Players[0]
-        uintptr_t* pedPtrAddr = (uintptr_t*)(g_gtasaBase + OFF_PLAYER_PED);
-        if (!pedPtrAddr) continue;
+        uintptr_t pedPtrAddr = base + OFF_PLAYER_PED;
+        if (!isValidPtr(pedPtrAddr)) continue;
 
-        uintptr_t ped = *pedPtrAddr;
-        if (!ped || ped < 0x1000) continue; // pointer tidak valid
+        uintptr_t ped = *(uintptr_t*)pedPtrAddr;
+        if (!isValidPtr(ped)) continue;
 
-        // Baca health saat ini
-        float* healthPtr = (float*)(ped + OFF_HEALTH);
-        float* armorPtr  = (float*)(ped + OFF_ARMOR);
+        // Validasi dan tulis health
+        uintptr_t healthAddr = ped + OFF_HEALTH;
+        uintptr_t armorAddr  = ped + OFF_ARMOR;
+        if (!isValidPtr(healthAddr) || !isValidPtr(armorAddr)) continue;
 
-        // Validasi pointer
-        if ((uintptr_t)healthPtr < 0x1000) continue;
+        float hp    = *(float*)healthAddr;
+        float armor = *(float*)armorAddr;
 
-        float hp = *healthPtr;
-
-        // Force health ke 100 kalau di bawah threshold
+        // Hanya update kalau nilai masuk akal
         if (hp > 0.0f && hp < MAX_HEALTH) {
-            *healthPtr = MAX_HEALTH;
+            *(float*)healthAddr = MAX_HEALTH;
         }
-
-        // Force armor ke 100
-        float armor = *armorPtr;
-        if (armor < MAX_HEALTH) {
-            *armorPtr = MAX_HEALTH;
+        if (armor >= 0.0f && armor < MAX_HEALTH) {
+            *(float*)armorAddr = MAX_HEALTH;
         }
     }
 
@@ -105,7 +109,7 @@ static void onLoad() {
 
     // Start god mode thread
     pthread_t tid;
-    if (pthread_create(&tid, nullptr, godThread, nullptr) == 0) {
+    if (pthread_create(&tid, nullptr, godThread, (void*)g_gtasaBase) == 0) {
         pthread_detach(tid);
         writeLog("[Init] GodMode thread OK — health + armor selalu penuh!");
     } else {
